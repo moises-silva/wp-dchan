@@ -65,11 +65,39 @@ struct iodata {
 
 static unsigned char stdin_buf[IO_SIZE] = { 0 };
 static int stdin_buf_len = 0;
+
+static char *format_data(char *dest, char *src, int len)
+{
+	int i = 0;
+	char *d = dest;
+	for (i = 0; i < len; i++) {
+		switch (src[i]) {
+		case '\r':
+				d += sprintf(d, "\\r");
+			break;
+		case '\n':
+				d += sprintf(d, "\\n");
+			break;
+		default:
+			if (isprint(src[i])) {
+				*d = src[i];
+				d++;
+			} else {
+				d += sprintf(d, "<%02x>", src[i]);
+			}
+			break;
+		}
+	}
+	*d = '\0';
+	return dest;
+}
+
 static void *io_loop(void *args)
 {
 	struct iodata *io = args;
 	unsigned char rx_iobuf[IO_SIZE] = { 0 };
 	unsigned char tx_iobuf[IO_SIZE] = { 0 };
+	unsigned char iobuf_formatted[IO_SIZE * 3] = { 0 };
 	int wlen = 0;
 	int res = 0;
 	int i = 0;
@@ -110,11 +138,8 @@ static void *io_loop(void *args)
 			res = sangoma_readmsg(io->dev, &rx_hdr, sizeof(rx_hdr), rx_iobuf, sizeof(rx_iobuf), 0);
 			if (res > 0) {
 				fprintf(stdout, "\33[2K\r");
-				fprintf(stdout, "AT Rx: ");
-				fwrite(rx_iobuf, res, 1, stdout);
-				fprintf(stdout, "\n");
+				fprintf(stdout, "Rx << %s\n", format_data(iobuf_formatted, rx_iobuf, res));
 				fflush(stdout);
-				rl_forced_update_display();
 			} else {
 				fprintf(stderr, "Failed to read device: %d (%s)\n", res, strerror_r(errno, errstr, sizeof(errstr)));
 			}
@@ -132,9 +157,7 @@ static void *io_loop(void *args)
 			wlen -= res;
 			i += res;
 			if (!wlen) {
-				fprintf(stdout, "AT Tx: ");
-				fwrite(tx_iobuf, 1, i, stdout);
-				fprintf(stdout, "\n");
+				fprintf(stdout, "Tx >> %s\n", format_data(iobuf_formatted, tx_iobuf, i));
 				fflush(stdout);
 			}
 		}
@@ -215,7 +238,6 @@ int main (int argc, char *argv[])
 	}
 
 	g_running = 1;
-	fprintf(stdout, "Waiting for AT commands. Type enter after a command and wait for the response before sending another ...\n");
 
 	data.devstr = devstr;
 	data.waitable = uart_waitable;
@@ -245,7 +267,15 @@ int main (int argc, char *argv[])
 
 		pthread_mutex_lock(&g_io_lock);
 		stdin_buf_len = strlen(line);
+		if (stdin_buf_len > (sizeof(stdin_buf) - 1)) {
+			fprintf(stderr, "-ERR Line too long (max is %zd)\n", (sizeof(stdin_buf) - 1));
+			pthread_mutex_unlock(&g_io_lock);
+			continue;
+		}
+
 		memcpy(stdin_buf, line, stdin_buf_len);
+		stdin_buf[stdin_buf_len] = '\r';
+		stdin_buf_len++;
 		pthread_mutex_unlock(&g_io_lock);
 
 		free(line);
