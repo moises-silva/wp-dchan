@@ -65,6 +65,7 @@ struct iodata {
 
 static unsigned char stdin_buf[IO_SIZE] = { 0 };
 static int stdin_buf_len = 0;
+static int g_verbose = 0;
 
 static char *format_data(char *dest, char *src, int len)
 {
@@ -73,10 +74,14 @@ static char *format_data(char *dest, char *src, int len)
 	for (i = 0; i < len; i++) {
 		switch (src[i]) {
 		case '\r':
-				d += sprintf(d, "\\r");
+				if (g_verbose) {
+					d += sprintf(d, "\\r");
+				}
 			break;
 		case '\n':
-				d += sprintf(d, "\\n");
+				if (g_verbose) {
+					d += sprintf(d, "\\n");
+				}
 			break;
 		default:
 			if (isprint(src[i])) {
@@ -92,12 +97,23 @@ static char *format_data(char *dest, char *src, int len)
 	return dest;
 }
 
+static void print_data(char *fmt, char *data, int len)
+{
+	int flen = 0;
+	unsigned char iobuf_formatted[IO_SIZE * 2] = { 0 };
+	format_data(iobuf_formatted, data, len);
+	flen = strlen(iobuf_formatted);
+	if (flen > 0) {
+		fprintf(stdout, fmt, iobuf_formatted);
+		fflush(stdout);
+	}
+}
+
 static void *io_loop(void *args)
 {
 	struct iodata *io = args;
 	unsigned char rx_iobuf[IO_SIZE] = { 0 };
 	unsigned char tx_iobuf[IO_SIZE] = { 0 };
-	unsigned char iobuf_formatted[IO_SIZE * 3] = { 0 };
 	int wlen = 0;
 	int res = 0;
 	int i = 0;
@@ -137,9 +153,8 @@ static void *io_loop(void *args)
 			memset(&rx_hdr, 0, sizeof(rx_hdr));
 			res = sangoma_readmsg(io->dev, &rx_hdr, sizeof(rx_hdr), rx_iobuf, sizeof(rx_iobuf), 0);
 			if (res > 0) {
-				fprintf(stdout, "\33[2K\r");
-				fprintf(stdout, "Rx << %s\n", format_data(iobuf_formatted, rx_iobuf, res));
-				fflush(stdout);
+				//fprintf(stdout, "\33[2K\r");
+				print_data("Rx << %s\n", rx_iobuf, res);
 			} else {
 				fprintf(stderr, "Failed to read device: %d (%s)\n", res, strerror_r(errno, errstr, sizeof(errstr)));
 			}
@@ -157,8 +172,7 @@ static void *io_loop(void *args)
 			wlen -= res;
 			i += res;
 			if (!wlen) {
-				fprintf(stdout, "Tx >> %s\n", format_data(iobuf_formatted, tx_iobuf, i));
-				fflush(stdout);
+				print_data("Tx >> %s\n", tx_iobuf, i);
 			}
 		}
 	}
@@ -179,13 +193,16 @@ int main (int argc, char *argv[])
 	int spanno = 0;
 	int channo = 0;
 	int i = 0;
+	int tx_r = 1;
 	char errstr[255] = { 0 };
 	sangoma_wait_obj_t *uart_waitable = NULL;
 	sangoma_status_t sangstatus = SANG_STATUS_SUCCESS;
 
 	if (argc < 2) {
 		fprintf(stderr, "Usage:\n"
-						"-dev <sXcY>                 - D-channel Wanpipe device\n");
+						"-dev <sXcY> - D-channel Wanpipe device (e.g s1c2)\n"
+						"-v          - Verbose mode (prints \\r, \\n and other characters that are normally stripped\n"
+						"-nr         - Do not send \\r on transmission\n");
 		exit(1);
 	}
 
@@ -212,6 +229,11 @@ int main (int argc, char *argv[])
 				fprintf(stderr, "Invalid D-channel device %s (channel must be even number >= 2)\n", devstr);
 				exit(1);
 			}
+		} else if (!strcasecmp(argv[i], "-v")) {
+			g_verbose = 1;
+		} else if (!strcasecmp(argv[i], "-nr")) {
+			/* Do not send a carriage return on tx */
+			tx_r= 0;
 		} else {
 			fprintf(stderr, "Invalid option %s\n", argv[i]);
 			exit(1);
@@ -274,8 +296,10 @@ int main (int argc, char *argv[])
 		}
 
 		memcpy(stdin_buf, line, stdin_buf_len);
-		stdin_buf[stdin_buf_len] = '\r';
-		stdin_buf_len++;
+		if (tx_r) {
+			stdin_buf[stdin_buf_len] = '\r';
+			stdin_buf_len++;
+		}
 		pthread_mutex_unlock(&g_io_lock);
 
 		free(line);
