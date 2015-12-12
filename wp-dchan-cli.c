@@ -261,6 +261,9 @@ int main (int argc, char *argv[])
 
 	g_running = 1;
 
+	fprintf(stderr, "Wanpipe D-Chan command line\n");
+	fprintf(stderr, "Press CTRL + C to quit\n\n");
+
 	data.devstr = devstr;
 	data.waitable = uart_waitable;
 	data.dev = dev;
@@ -307,7 +310,7 @@ int main (int argc, char *argv[])
 	}
 
 	fprintf(stdout, "\33[2K\r");
-	fprintf(stdout, "\nAborting ...\n");
+	fprintf(stdout, "\nQuitting ...\n");
 
 	pthread_join(io_thread, NULL);
 
