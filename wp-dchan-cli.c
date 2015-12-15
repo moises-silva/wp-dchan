@@ -40,6 +40,8 @@
 
 #include <libsangoma.h>
 
+#include "atomic.h"
+
 #define IO_SIZE 512
 static int g_running = 0;
 static pthread_mutex_t g_io_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -66,6 +68,8 @@ struct iodata {
 static unsigned char stdin_buf[IO_SIZE] = { 0 };
 static int stdin_buf_len = 0;
 static int g_verbose = 0;
+
+static atomic_t g_in_alarm = ATOMIC_INIT(0);
 
 static char *format_data(char *dest, char *src, int len)
 {
@@ -120,22 +124,40 @@ static void *io_loop(void *args)
 	uint32_t input_flags = 0;
 	uint32_t output_flags = 0;
 	sangoma_status_t sangstatus = SANG_STATUS_SUCCESS;
+	wanpipe_tdm_api_t tdm_api = { 0 };
 	char errstr[255] = { 0 };
+	int fd = -1;
+	int err = 0;
+	unsigned char frontend_status;
+
+	fd = sangoma_wait_obj_get_fd(io->waitable);
+	err = sangoma_tdm_get_fe_status(fd, &tdm_api, &frontend_status);
+	if (err) {
+		fprintf(stderr, "Failed to read device front end status: %s\n", strerror_r(errno, errstr, sizeof(errstr)));
+		g_running = 0;
+	}
+	if (frontend_status != FE_CONNECTED) {
+		fprintf(stderr, "Wanpipe device is disconnected\n");
+		atomic_set(&g_in_alarm, 1);
+	}
 
 	while (g_running) {
-		input_flags = SANG_WAIT_OBJ_HAS_INPUT;
+		input_flags = SANG_WAIT_OBJ_HAS_EVENTS;
+		if (!atomic_read(&g_in_alarm)) {
+			input_flags |= SANG_WAIT_OBJ_HAS_INPUT;
 
-		pthread_mutex_lock(&g_io_lock);
-		if (!wlen && stdin_buf_len) {
-			wlen = stdin_buf_len;
-			stdin_buf_len = 0;
-			memcpy(tx_iobuf, stdin_buf, wlen);
-			i = 0;
-		}
-		pthread_mutex_unlock(&g_io_lock);
+			pthread_mutex_lock(&g_io_lock);
+			if (!wlen && stdin_buf_len) {
+				wlen = stdin_buf_len;
+				stdin_buf_len = 0;
+				memcpy(tx_iobuf, stdin_buf, wlen);
+				i = 0;
+			}
+			pthread_mutex_unlock(&g_io_lock);
 
-		if (wlen) {
-			input_flags |= SANG_WAIT_OBJ_HAS_OUTPUT;
+			if (wlen) {
+				input_flags |= SANG_WAIT_OBJ_HAS_OUTPUT;
+			}
 		}
 
 		sangstatus = sangoma_waitfor(io->waitable, input_flags, &output_flags, 10);
@@ -173,6 +195,34 @@ static void *io_loop(void *args)
 			i += res;
 			if (!wlen) {
 				print_data("Tx >> %s\n", tx_iobuf, i);
+			}
+		}
+
+		if (output_flags & SANG_WAIT_OBJ_HAS_EVENTS) {
+			memset(&tdm_api, 0, sizeof(tdm_api));
+			err = sangoma_tdm_read_event(fd, &tdm_api);
+			if (err) {
+				fprintf(stdout, "Failed to retrieve event from device: %s\n", strerror(errno));
+				break;
+			}
+			switch (tdm_api.wp_tdm_cmd.event.wp_tdm_api_event_type) {
+			case WP_API_EVENT_LINK_STATUS:
+				/* Ignore, the alarm event will be used to set/clear the g_in_alarm status */
+				if (tdm_api.wp_tdm_cmd.event.wp_tdm_api_event_link_status == WP_TDMAPI_EVENT_LINK_STATUS_CONNECTED) {
+					printf("Wanpipe link connected\n");
+				} else {
+					printf("Wanpipe link disconnected\n");
+				}
+				break;
+			case WP_API_EVENT_ALARM:
+				if (tdm_api.wp_tdm_cmd.event.wp_api_event_alarm) {
+					printf("Alarm detected\n");
+					atomic_set(&g_in_alarm, 1);
+				} else {
+					printf("Alarm cleared\n");
+					atomic_set(&g_in_alarm, 0);
+				}
+				break;
 			}
 		}
 	}
@@ -289,6 +339,11 @@ int main (int argc, char *argv[])
 			continue;
 		}
 		add_history(line);
+
+		if (atomic_read(&g_in_alarm)) {
+			fprintf(stderr, "Cannot transmit data when the device is in alarm\n");
+			continue;
+		}
 
 		pthread_mutex_lock(&g_io_lock);
 		stdin_buf_len = strlen(line);
