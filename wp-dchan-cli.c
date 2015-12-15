@@ -108,7 +108,7 @@ static void print_data(char *fmt, char *data, int len)
 	format_data(iobuf_formatted, data, len);
 	flen = strlen(iobuf_formatted);
 	if (flen > 0) {
-		fprintf(stdout, fmt, iobuf_formatted);
+		printf(fmt, iobuf_formatted);
 		fflush(stdout);
 	}
 }
@@ -175,7 +175,7 @@ static void *io_loop(void *args)
 			memset(&rx_hdr, 0, sizeof(rx_hdr));
 			res = sangoma_readmsg(io->dev, &rx_hdr, sizeof(rx_hdr), rx_iobuf, sizeof(rx_iobuf), 0);
 			if (res > 0) {
-				//fprintf(stdout, "\33[2K\r");
+				//printf("\33[2K\r");
 				print_data("Rx << %s\n", rx_iobuf, res);
 			} else {
 				fprintf(stderr, "Failed to read device: %d (%s)\n", res, strerror_r(errno, errstr, sizeof(errstr)));
@@ -188,7 +188,7 @@ static void *io_loop(void *args)
 			memset(&tx_hdr, 0, sizeof(tx_hdr));
 			res = sangoma_writemsg(io->dev, &tx_hdr, sizeof(tx_hdr), &tx_iobuf[i], wlen, 0);
 			if (res <= 0) {
-				fprintf(stdout, "Failed to write to uart device (res:%d len:%d): %s\n", res, wlen, strerror(errno));
+				fprintf(stderr, "Failed to write to uart device (res:%d len:%d): %s\n", res, wlen, strerror(errno));
 				break;
 			}
 			wlen -= res;
@@ -202,7 +202,7 @@ static void *io_loop(void *args)
 			memset(&tdm_api, 0, sizeof(tdm_api));
 			err = sangoma_tdm_read_event(fd, &tdm_api);
 			if (err) {
-				fprintf(stdout, "Failed to retrieve event from device: %s\n", strerror(errno));
+				fprintf(stderr, "Failed to retrieve event from device: %s\n", strerror(errno));
 				break;
 			}
 			switch (tdm_api.wp_tdm_cmd.event.wp_tdm_api_event_type) {
@@ -364,8 +364,8 @@ int main (int argc, char *argv[])
 		line = NULL;
 	}
 
-	fprintf(stdout, "\33[2K\r");
-	fprintf(stdout, "\nQuitting ...\n");
+	printf("\33[2K\r");
+	printf("\nQuitting ...\n");
 
 	pthread_join(io_thread, NULL);
 
